@@ -2,10 +2,6 @@
 #
 # Install everything with:
 #   pip install -r requirements.txt
-#
-# A note on versions:
-# We pin major versions (fastapi>=0.110) but allow minor updates.
-# This gives you security patches without breaking changes.
 
 # ── Web Framework ────────────────────────────────────────────────────────────
 fastapi>=0.110.0          # The API framework — like Express.js but Python
@@ -14,18 +10,15 @@ python-multipart>=0.0.9   # Required for FastAPI to handle file uploads (FormDat
 
 # ── PDF Processing ────────────────────────────────────────────────────────────
 pdfplumber>=0.10.3        # Extracts text from PDFs. Handles columns, tables, etc.
-                          # Much better than PyPDF2 for real-world messy PDFs.
 
 # ── Text Splitting ────────────────────────────────────────────────────────────
 langchain-text-splitters>=0.0.1  # Just the chunking utility from LangChain.
-                                  # We don't need all of LangChain — just this one piece.
-                                  # It handles overlapping chunks cleanly.
 
 # ── Embeddings ────────────────────────────────────────────────────────────────
-sentence-transformers>=2.7.0  # Runs embedding models locally. Free, no API key needed.
-                               # We use all-MiniLM-L6-v2: fast, small (80MB), great quality.
-torch>=2.0.0                  # PyTorch — the deep learning library sentence-transformers runs on.
-                               # CPU-only is fine for embeddings, no GPU needed.
+fastembed>=0.3.0          # Lightweight embedding library using ONNX runtime (NOT PyTorch).
+                          # Uses ~80MB RAM vs ~500MB for sentence-transformers+torch.
+                          # This is the key fix for Render's free 512MB limit.
+                          # We use BAAI/bge-small-en-v1.5: 384-dim, fast, great quality.
 
 # ── Vector Database ───────────────────────────────────────────────────────────
 chromadb>=0.4.24          # Local vector database. Stores embeddings and lets us
@@ -34,10 +27,7 @@ chromadb>=0.4.24          # Local vector database. Stores embeddings and lets us
 
 # ── LLM (Groq) ────────────────────────────────────────────────────────────────
 groq>=0.7.0               # Official Groq Python SDK. Supports streaming out of the box.
-                          # Groq runs Llama 3.3 70B at ~800 tokens/sec — insanely fast.
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 python-dotenv>=1.0.0      # Loads .env files into environment variables.
-                          # Keeps API keys out of your code.
 pydantic>=2.0.0           # Data validation library. FastAPI is built on top of it.
-                          # Automatically validates request/response shapes.
