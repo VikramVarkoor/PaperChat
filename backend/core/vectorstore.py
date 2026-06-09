@@ -1,154 +1,82 @@
 from __future__ import annotations
 
 """
-core/vectorstore.py — Chroma Vector Database Operations
+core/vectorstore.py — In-Memory Vector Store using NumPy
 
-This is the "memory" of PaperChat. After a PDF is chunked and embedded,
-we store everything here. When a user asks a question, we search here.
+WHY WE DITCHED CHROMADB:
+  ChromaDB is a full vector database with an HNSW index, persistence layer,
+  telemetry, gRPC server, and many dependencies. That overhead consumed
+  too much of Render's free 512MB RAM limit, causing OOM crashes.
 
-WHAT IS A VECTOR DATABASE?
-  A regular database (like PostgreSQL) stores data and lets you search by
-  exact values: WHERE name = 'John' or WHERE age > 25.
+  For our use case (one document, ~50-200 chunks, one user at a time),
+  we don't need any of that complexity. NumPy is already installed as a
+  fastembed dependency and is all we need.
 
-  A vector database stores data AND its embedding vectors, and lets you search
-  by SEMANTIC SIMILARITY: "find me the 4 records most similar in meaning to X."
+HOW THIS WORKS:
+  We keep a simple Python dict in memory:
+    _store = {
+      "doc_abc123": {
+        "texts":      ["chunk 1 text", "chunk 2 text", ...],
+        "embeddings": numpy array of shape (N, 384),
+        "pages":      [1, 1, 2, 3, ...],
+      }
+    }
 
-  This is fundamentally different — you're searching by meaning, not by keywords.
-  That's what makes RAG smart: it finds relevant chunks even if the question
-  uses completely different words than the document.
+  To search, we:
+    1. Embed the query → shape (384,)
+    2. Compute cosine similarity between the query and every chunk embedding
+       using matrix multiplication (fast, vectorized)
+    3. Return the top-K chunks by similarity score
 
-CHROMA CONCEPTS:
-  Collection: like a database table — stores chunks for ONE document.
-              We create one collection per uploaded document.
-
-  Document:   in Chroma's terminology, a "document" is one chunk of text.
-              Confusing naming (they call chunks "documents"), but that's Chroma's API.
-
-  Embedding:  the vector representation of each chunk, stored alongside the text.
-
-  Metadata:   extra info stored with each chunk (page number, chunk index, etc.)
-              Retrieved alongside the text so we can show citations.
-
-  ID:         a unique string identifier for each chunk within a collection.
-
-  Query:      search the collection with an embedding vector.
-              Returns the N most similar chunks (cosine similarity).
+TRADE-OFFS vs ChromaDB:
+  - No disk persistence: data disappears on server restart
+    (acceptable since Render free tier restarts anyway)
+  - No HNSW approximation: we do exact search (actually MORE accurate!)
+    (fast enough for our scale — 200 chunks takes <1ms)
+  - No overhead: ~0 extra memory beyond the embeddings themselves
 """
 
+import numpy as np
+from core.embeddings import embed_query
 import os
-import uuid
-import chromadb
-from chromadb.config import Settings
 
-from core.embeddings import embed_texts, embed_query
+TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "4"))
 
-# ── Chroma Client (Singleton) ─────────────────────────────────────────────────
-
-CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "./chroma_data")
-TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", 4))
-
-# The Chroma client is the connection to the vector database.
-# PersistentClient saves data to disk — it survives server restarts.
-# (Without persistence, all indexed documents disappear on restart.)
-_chroma_client: chromadb.PersistentClient | None = None
-
-
-def get_chroma_client() -> chromadb.PersistentClient:
-    """Returns the Chroma client, creating it on first call (singleton)."""
-    global _chroma_client
-    if _chroma_client is None:
-        os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
-        _chroma_client = chromadb.PersistentClient(
-            path=CHROMA_PERSIST_DIR,
-            settings=Settings(anonymized_telemetry=False),  # No usage tracking
-        )
-    return _chroma_client
-
-
-# ── Core Operations ───────────────────────────────────────────────────────────
-
-def create_collection(document_id: str) -> chromadb.Collection:
-    """
-    Creates a new Chroma collection for a document.
-
-    Each document gets its own collection, identified by the document_id.
-    This makes it easy to:
-      - Search within a specific document
-      - Delete a document (just delete its collection)
-      - Support multiple simultaneous documents in the future
-
-    Args:
-        document_id: Unique ID for the document (becomes collection name)
-
-    Returns:
-        The newly created Chroma collection object
-    """
-    client = get_chroma_client()
-
-    # Delete existing collection if it exists (handles re-uploads of same doc)
-    try:
-        client.delete_collection(document_id)
-    except Exception:
-        pass  # Collection didn't exist, that's fine
-
-    # `get_or_create_collection` is idempotent — safe to call multiple times.
-    # cosine distance = 1 - cosine_similarity.
-    # We use cosine because we normalized our embeddings in embed_texts().
-    collection = client.get_or_create_collection(
-        name=document_id,
-        metadata={"hnsw:space": "cosine"},  # Tell Chroma to use cosine distance
-    )
-    return collection
+# In-memory store: document_id → stored data
+_store: dict[str, dict] = {}
 
 
 def index_chunks(document_id: str, chunks: list[dict]) -> None:
     """
-    Embeds all chunks and stores them in the Chroma collection.
-
-    This is the most compute-intensive part of ingestion.
-    For a 50-page PDF (~200 chunks), this takes about 5-10 seconds on CPU.
+    Embeds all chunks and stores them in memory.
 
     Args:
-        document_id: The document's collection name in Chroma
-        chunks: List of {"content": str, "page": int} from ingestion.py
+        document_id: Unique ID for this document (used as the key in _store)
+        chunks: List of {"content": str, "page": int} dicts from ingestion.py
     """
-    collection = create_collection(document_id)
+    from core.embeddings import embed_texts
 
-    # Extract just the text for batch embedding
     texts = [chunk["content"] for chunk in chunks]
+    pages = [chunk["page"] for chunk in chunks]
 
-    # Embed all chunks at once (batch processing)
     print(f"Embedding {len(texts)} chunks...")
     embeddings = embed_texts(texts)
     print("Embedding complete.")
 
-    # Generate unique IDs for each chunk
-    # We use f-strings with chunk index: "doc_abc123_chunk_0", "doc_abc123_chunk_1", etc.
-    ids = [f"{document_id}_chunk_{i}" for i in range(len(chunks))]
+    # Store as numpy array for fast matrix ops during search
+    embeddings_array = np.array(embeddings, dtype=np.float32)
 
-    # Metadata stored alongside each chunk — retrieved with search results
-    # This is what powers the source citation feature
-    metadatas = [
-        {
-            "page": chunk["page"],
-            "chunk_index": i,
-            "document_id": document_id,
-        }
-        for i, chunk in enumerate(chunks)
-    ]
+    # L2-normalize so cosine similarity = dot product (faster search)
+    norms = np.linalg.norm(embeddings_array, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)  # Avoid division by zero
+    embeddings_array = embeddings_array / norms
 
-    # Chroma's add() stores everything at once.
-    # `documents` = the text (what gets returned in results)
-    # `embeddings` = the vectors (what gets searched)
-    # `metadatas` = the extra info (page numbers, etc.)
-    # `ids` = unique identifiers (required by Chroma)
-    collection.add(
-        documents=texts,
-        embeddings=embeddings,
-        metadatas=metadatas,
-        ids=ids,
-    )
-    print(f"Indexed {len(chunks)} chunks into collection '{document_id}'")
+    _store[document_id] = {
+        "texts": texts,
+        "embeddings": embeddings_array,
+        "pages": pages,
+    }
+    print(f"Indexed {len(chunks)} chunks for document '{document_id}'")
 
 
 def search_similar_chunks(document_id: str, query: str) -> list[dict]:
@@ -158,81 +86,74 @@ def search_similar_chunks(document_id: str, query: str) -> list[dict]:
     This is the "R" in RAG — Retrieval.
 
     How it works:
-      1. Embed the query into a vector
-      2. Chroma computes cosine distance between the query vector
-         and every chunk vector in the collection
-      3. Returns the TOP_K_RESULTS closest chunks
-      4. "Closest" in cosine space = most similar in meaning
+      1. Embed the query into a 384-dim vector
+      2. Normalize it (so dot product = cosine similarity)
+      3. Compute dot product with every chunk embedding (matrix multiply)
+      4. Sort by score, return top K
 
     Args:
-        document_id: Which document's collection to search
+        document_id: Which document to search
         query: The user's question as a plain string
 
     Returns:
         List of dicts: [{"content": str, "page": int, "score": float}, ...]
         Sorted by relevance (most relevant first).
     """
-    client = get_chroma_client()
-
-    # Get the collection for this document
-    try:
-        collection = client.get_collection(document_id)
-    except Exception:
+    if document_id not in _store:
         raise ValueError(f"Document '{document_id}' not found. Please re-upload it.")
 
-    # Embed the query
-    query_embedding = embed_query(query)
+    data = _store[document_id]
+    texts = data["texts"]
+    embeddings = data["embeddings"]   # shape: (N, 384), already normalized
+    pages = data["pages"]
 
-    # Search! Chroma returns the n_results most similar chunks.
-    results = collection.query(
-        query_embeddings=[query_embedding],  # Must be a list of embeddings
-        n_results=min(TOP_K_RESULTS, collection.count()),  # Can't request more than exist
-        include=["documents", "metadatas", "distances"],
-    )
+    # Embed and normalize the query
+    query_vec = np.array(embed_query(query), dtype=np.float32)
+    query_norm = np.linalg.norm(query_vec)
+    if query_norm > 0:
+        query_vec = query_vec / query_norm
 
-    # Chroma returns nested lists (one per query — we only query once)
-    # So we take [0] to get results for our single query
-    documents = results["documents"][0]
-    metadatas = results["metadatas"][0]
-    distances = results["distances"][0]
+    # Cosine similarity = dot product (since vectors are already normalized)
+    # Result shape: (N,) — one similarity score per chunk
+    similarities = embeddings @ query_vec
 
-    # Convert distance to similarity score
-    # Chroma returns cosine DISTANCE (0 = identical, 2 = opposite)
-    # We convert to cosine SIMILARITY (1 = identical, -1 = opposite)
-    # by: similarity = 1 - distance
-    chunks = []
-    for doc, meta, distance in zip(documents, metadatas, distances):
-        similarity_score = round(1 - distance, 4)
-        chunks.append({
-            "content": doc,
-            "page": meta.get("page", 1),
-            "score": max(0.0, similarity_score),  # Clamp to [0, 1]
+    # Get top-K indices sorted by similarity (descending)
+    k = min(TOP_K_RESULTS, len(texts))
+    top_indices = np.argsort(similarities)[::-1][:k]
+
+    results = []
+    for idx in top_indices:
+        results.append({
+            "content": texts[idx],
+            "page": pages[idx],
+            "score": round(float(similarities[idx]), 4),
         })
 
-    return chunks
+    return results
 
 
 def delete_collection(document_id: str) -> bool:
     """
-    Deletes a document's collection from Chroma.
-    Called when the user clicks "New doc" in the frontend.
+    Removes a document from the in-memory store.
+    Called when the user uploads a new document.
 
-    Returns True if deleted, False if collection didn't exist.
+    Returns True if deleted, False if it didn't exist.
     """
-    client = get_chroma_client()
-    try:
-        client.delete_collection(document_id)
-        print(f"Deleted collection '{document_id}'")
+    if document_id in _store:
+        del _store[document_id]
+        print(f"Deleted document '{document_id}' from store")
         return True
-    except Exception:
-        return False
+    return False
 
 
 def collection_exists(document_id: str) -> bool:
-    """Checks if a collection exists (used for health checks)."""
-    client = get_chroma_client()
-    try:
-        client.get_collection(document_id)
-        return True
-    except Exception:
-        return False
+    """Checks if a document is loaded in memory."""
+    return document_id in _store
+
+
+def get_store_stats() -> dict:
+    """Returns stats about what's currently in memory (for health checks)."""
+    return {
+        "documents_loaded": len(_store),
+        "document_ids": list(_store.keys()),
+    }

@@ -145,20 +145,19 @@ async def health_check():
     The frontend pings this at startup to verify the backend is running.
     """
     from core.embeddings import get_embedding_model, EMBEDDING_MODEL_NAME
-    from core.vectorstore import get_chroma_client
+    from core.vectorstore import get_store_stats
 
     # Check embedding model
     try:
-        model = get_embedding_model()
+        get_embedding_model()
         embedding_status = f"{EMBEDDING_MODEL_NAME} (loaded)"
     except Exception as e:
         embedding_status = f"ERROR: {e}"
 
-    # Check Chroma
+    # Check vector store
     try:
-        client = get_chroma_client()
-        collections = client.list_collections()
-        chroma_status = f"OK ({len(collections)} collections)"
+        stats = get_store_stats()
+        chroma_status = f"OK ({stats['documents_loaded']} documents in memory)"
     except Exception as e:
         chroma_status = f"ERROR: {e}"
 
