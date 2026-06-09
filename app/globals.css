@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body { height: 100%; }
+
+/* Clean dark base — no dot grid, mesh blobs handle the texture */
+body {
+  background-color: #07070f;
+}
+
+/* ── Scrollbar ───────────────────────────────────────────────────────────── */
+
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #3d3d55; }
+
+/* ── Mesh blob base style ────────────────────────────────────────────────── */
+/* Each blob is a blurred circle positioned absolutely behind all content.
+   `mix-blend-mode: normal` keeps colours additive on the dark bg.
+   `pointer-events: none` ensures they never block clicks. */
+.mesh-blob {
+  position: fixed;
+  border-radius: 50%;
+  filter: blur(80px);
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.55;
+}
+
+/* ── Animations ─────────────────────────────────────────────────────────── */
+
+@keyframes shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .animate-shimmer { animation: shimmer 1.6s ease-in-out infinite; }
+}

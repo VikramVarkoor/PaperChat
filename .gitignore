@@ -1,0 +1,21 @@
+# ── Secrets (NEVER commit these) ─────────────────────────────────────────────
+.env
+.env.local
+.env.production
+.env*.local
+
+# ── Python ────────────────────────────────────────────────────────────────────
+backend/venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/*.pyc
+backend/chroma_data/        # Chroma vector DB — regenerated on each upload
+
+# ── Next.js ───────────────────────────────────────────────────────────────────
+.next/
+node_modules/
+out/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
