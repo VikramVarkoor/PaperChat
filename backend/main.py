@@ -93,8 +93,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",   # Next.js dev server
         "http://localhost:3001",   # Alternative port
-        "https://*.vercel.app",    # Vercel deployments
     ],
+    # allow_origins wildcard doesn't work for *.vercel.app in FastAPI.
+    # Use allow_origin_regex instead — this matches any vercel.app subdomain.
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],           # Allow GET, POST, DELETE, etc.
     allow_headers=["*"],           # Allow Content-Type, Authorization, etc.

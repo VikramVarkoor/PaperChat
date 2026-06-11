@@ -36,10 +36,15 @@ import {
   UploadResponse,
 } from "./types";
 
-// The base URL for all API calls. Because next.config.js rewrites
-// /api/py/* → http://localhost:8000/*, we use this prefix everywhere.
-// In production you'd set this via an environment variable.
-const API_BASE = "/api/py";
+// The base URL for all API calls.
+//
+// In production (Vercel), NEXT_PUBLIC_BACKEND_URL is set to the Render URL
+// (e.g. https://paperchat-c22m.onrender.com). We call the backend directly
+// from the browser to avoid Vercel's proxy timeout on long-running uploads.
+//
+// In local dev, NEXT_PUBLIC_BACKEND_URL is not set, so we fall back to
+// /api/py which next.config.js rewrites to http://localhost:8000.
+const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? "/api/py";
 
 // ── Document Upload ───────────────────────────────────────────────────────
 
