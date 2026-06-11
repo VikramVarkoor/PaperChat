@@ -36,6 +36,64 @@ export default function ChatWindow({ document, onClearDocument }: ChatWindowProp
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Auto-summary: streams a brief overview as soon as the chat opens.
+  // This runs once on mount — no dependencies needed since document.id
+  // never changes while this component is alive.
+  useEffect(() => {
+    const autoSummarize = async () => {
+      setIsLoading(true);
+      const summaryId = generateId();
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: summaryId,
+          role: "assistant" as const,
+          content: "",
+          timestamp: new Date().toISOString(),
+          isStreaming: true,
+          sources: [],
+        },
+      ]);
+
+      await streamChat(
+        {
+          question:
+            "Give me a concise overview of this document — what is it about and what are the 3-4 most important points?",
+          documentId: document.id,
+          history: [],
+        },
+        (token) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === summaryId ? { ...m, content: m.content + token } : m
+            )
+          );
+        },
+        (sources) => {
+          setMessages((prev) =>
+            prev.map((m) => (m.id === summaryId ? { ...m, sources } : m))
+          );
+        },
+        () => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === summaryId ? { ...m, isStreaming: false } : m
+            )
+          );
+          setIsLoading(false);
+        },
+        () => {
+          // If summary fails, silently remove the empty placeholder
+          setMessages((prev) => prev.filter((m) => m.id !== summaryId));
+          setIsLoading(false);
+        }
+      );
+    };
+
+    autoSummarize();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const handleTextareaInput = () => {
     const el = textareaRef.current;
     if (!el) return;
@@ -162,8 +220,8 @@ export default function ChatWindow({ document, onClearDocument }: ChatWindowProp
       <div className="flex-shrink-0 border-t border-gray-800/50 bg-[#0a0a12]/80 backdrop-blur-xl px-4 py-4">
         <div className="max-w-2xl mx-auto">
 
-          {/* Suggestion chips */}
-          {messages.length === 1 && (
+          {/* Suggestion chips — show once summary finishes streaming */}
+          {messages.length >= 2 && !isLoading && (
             <div className="flex flex-wrap gap-2 mb-3">
               {["What is the main topic?", "Summarize the key points", "What conclusions does it draw?"].map((s) => (
                 <button
@@ -205,7 +263,7 @@ export default function ChatWindow({ document, onClearDocument }: ChatWindowProp
           </div>
 
           <p className="text-center text-[11px] text-gray-700/60 mt-2.5 tracking-wide">
-            Groq Llama 3.3 · sentence-transformers · Chroma — answers grounded in your document
+            Groq Llama 3.3 · fastembed · numpy — answers grounded in your document
           </p>
         </div>
       </div>

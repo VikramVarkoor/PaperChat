@@ -259,7 +259,7 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
         )}
 
         <p className="text-center text-xs text-gray-700 mt-8">
-          Powered by Groq Llama 3.3 · sentence-transformers · Chroma
+          Powered by Groq Llama 3.3 · fastembed · numpy
         </p>
 
       </div>
