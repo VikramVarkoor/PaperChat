@@ -59,8 +59,15 @@ def index_chunks(document_id: str, chunks: list[dict]) -> None:
     texts = [chunk["content"] for chunk in chunks]
     pages = [chunk["page"] for chunk in chunks]
 
-    print(f"Embedding {len(texts)} chunks...")
-    embeddings = embed_texts(texts)
+    # Embed in small batches to avoid memory spikes on constrained servers.
+    # Processing 8 chunks at a time keeps peak RAM low while still being fast.
+    BATCH_SIZE = 8
+    all_embeddings: list[list[float]] = []
+    print(f"Embedding {len(texts)} chunks in batches of {BATCH_SIZE}...")
+    for i in range(0, len(texts), BATCH_SIZE):
+        batch = texts[i : i + BATCH_SIZE]
+        all_embeddings.extend(embed_texts(batch))
+    embeddings = all_embeddings
     print("Embedding complete.")
 
     # Store as numpy array for fast matrix ops during search
