@@ -1,6 +1,8 @@
 # PaperChat
 
-![PaperChat Demo](assets/demo.gif)
+<div align="center">
+  <img src="assets/demo.gif" alt="PaperChat Demo" width="800"/>
+</div>
 
 Chat with any PDF using AI. Upload a research paper, textbook, or report and ask questions about it. Answers are sourced directly from your document with citations.
 
