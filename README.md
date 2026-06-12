@@ -1,5 +1,7 @@
 # PaperChat
 
+![PaperChat Demo](assets/demo.gif)
+
 Chat with any PDF using AI. Upload a research paper, textbook, or report and ask questions about it. Answers are sourced directly from your document with citations.
 
 **Live demo → [paper-chat-five.vercel.app](https://paper-chat-five.vercel.app)**
@@ -156,4 +158,4 @@ paperchat/
 
 ---
 
-Built by [Vikram Varkoor](https://github.com/VikramVarkoor)
+Built by [Vikram Varkoor](https://www.linkedin.com/in/vikram-varkoor/)
