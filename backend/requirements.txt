@@ -1,0 +1,34 @@
+# requirements.txt — Python dependencies for PaperChat backend
+#
+# Install everything with:
+#   pip install -r requirements.txt
+
+# ── Web Framework ────────────────────────────────────────────────────────────
+fastapi>=0.110.0          # The API framework — like Express.js but Python
+uvicorn[standard]>=0.29.0 # ASGI server that runs FastAPI (like Node for Express)
+python-multipart>=0.0.9   # Required for FastAPI to handle file uploads (FormData)
+
+# ── PDF Processing ────────────────────────────────────────────────────────────
+pdfplumber>=0.10.3        # Extracts text from PDFs. Handles columns, tables, etc.
+
+# ── Text Splitting ────────────────────────────────────────────────────────────
+langchain-text-splitters>=0.0.1  # Just the chunking utility from LangChain.
+
+# ── Embeddings ────────────────────────────────────────────────────────────────
+fastembed>=0.3.0          # Lightweight embedding library using ONNX runtime (NOT PyTorch).
+                          # Uses ~80MB RAM vs ~500MB for sentence-transformers+torch.
+                          # This is the key fix for Render's free 512MB limit.
+                          # We use BAAI/bge-small-en-v1.5: 384-dim, fast, great quality.
+
+# ── Vector Search ─────────────────────────────────────────────────────────────
+numpy>=1.24.0             # Powers our in-memory vector store. Already installed
+                          # as a fastembed dependency, but we pin it explicitly.
+                          # We do cosine similarity via matrix multiply — fast,
+                          # lightweight, no external database needed.
+
+# ── LLM (Groq) ────────────────────────────────────────────────────────────────
+groq>=0.7.0               # Official Groq Python SDK. Supports streaming out of the box.
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0      # Loads .env files into environment variables.
+pydantic>=2.0.0           # Data validation library. FastAPI is built on top of it.
