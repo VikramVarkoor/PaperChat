@@ -44,7 +44,7 @@ from typing import AsyncGenerator
 from groq import AsyncGroq
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-LLM_MODEL = os.getenv("LLM_MODEL", "llama-3.3-70b-versatile")
+LLM_MODEL = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 # ── Groq Client (Singleton) ───────────────────────────────────────────────────
@@ -176,7 +176,7 @@ async def stream_answer(
         temperature=0.1,    # Low temperature = more focused, less creative
                              # 0.0 = deterministic, 1.0 = very random
                              # For document Q&A, we want accuracy over creativity
-        max_tokens=1024,     # Cap the response length (prevents runaway outputs)
+        max_tokens=2048,     # Cap the response length (prevents runaway outputs)
     )
 
     # Iterate over the streaming response

@@ -9,7 +9,7 @@ services:
       - key: GROQ_API_KEY
         sync: false          # You'll paste this manually in Render dashboard
       - key: LLM_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       - key: EMBEDDING_MODEL
         value: all-MiniLM-L6-v2
       - key: CHROMA_PERSIST_DIR

@@ -6,7 +6,7 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "PaperChat — Chat with your documents",
-  description: "Upload any PDF and have a conversation with it. Powered by RAG and Groq Llama 3.",
+  description: "Upload any PDF and have a conversation with it. Powered by RAG and Groq.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

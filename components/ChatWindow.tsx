@@ -263,7 +263,7 @@ export default function ChatWindow({ document, onClearDocument }: ChatWindowProp
           </div>
 
           <p className="text-center text-[11px] text-gray-700/60 mt-2.5 tracking-wide">
-            Groq Llama 3.3 · fastembed · numpy — answers grounded in your document
+            Groq gpt-oss-120b · fastembed · numpy — answers grounded in your document
           </p>
         </div>
       </div>
