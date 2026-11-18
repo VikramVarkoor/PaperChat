@@ -14,7 +14,7 @@ const PIPELINE_STEPS = [
   { id: "extract", label: "Extracting text",             detail: "Reading PDF pages" },
   { id: "chunk",   label: "Splitting into chunks",       detail: "Creating ~500 token segments" },
   { id: "embed",   label: "Generating embeddings",       detail: "Converting text to vectors" },
-  { id: "store",   label: "Indexing vector database",    detail: "Storing in Chroma" },
+  { id: "store",   label: "Indexing vector database",    detail: "Storing in NumPy index" },
 ] as const;
 
 export default function FileUpload({ onDocumentReady }: FileUploadProps) {
