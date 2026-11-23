@@ -31,6 +31,7 @@ WHY OVERLAPPING CHUNKS?
 """
 
 import bisect
+import gc
 import os
 import re
 import tempfile
@@ -45,6 +46,9 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1500))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
 
 # Matches the "[Page N]" marker we insert in front of every page's text.
+# Pages read per pass of the PDF. Small keeps peak memory low.
+PAGES_PER_BATCH = 5
+
 _PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 
@@ -69,17 +73,28 @@ def extract_text_from_pdf(file: IO[bytes]) -> tuple[str, int]:
     """
     pages_text = []
 
+    # Page count from a first, light open.
     with pdfplumber.open(file) as pdf:
         page_count = len(pdf.pages)
 
-        for page_num, page in enumerate(pdf.pages, start=1):
-            # extract_text() returns None if the page has no extractable text
-            # (e.g. a page that's just an image with no OCR)
-            text = page.extract_text()
+    # pdfplumber keeps every character and layout object of a page in memory
+    # until the PDF is closed. On a long PDF that adds up to hundreds of MB
+    # and gets a 512MB server killed. So read the PDF in small batches of
+    # pages, closing and reopening between batches so memory is released.
+    for start in range(1, page_count + 1, PAGES_PER_BATCH):
+        batch = list(range(start, min(start + PAGES_PER_BATCH, page_count + 1)))
+        file.seek(0)
+        with pdfplumber.open(file, pages=batch) as pdf:
+            for page_num, page in zip(batch, pdf.pages):
+                # extract_text() returns None if the page has no extractable
+                # text (e.g. an image-only page, we don't do OCR)
+                text = page.extract_text()
+                page.flush_cache()
 
-            if text and text.strip():
-                # Add a page marker so we can track which chunk came from which page
-                pages_text.append(f"[Page {page_num}]\n{text.strip()}")
+                if text and text.strip():
+                    # Page marker so we can track which chunk came from which page
+                    pages_text.append(f"[Page {page_num}]\n{text.strip()}")
+        gc.collect()
 
     full_text = "\n\n".join(pages_text)
     return full_text, page_count
