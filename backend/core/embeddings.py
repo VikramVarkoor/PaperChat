@@ -35,6 +35,8 @@ HOW WE USE THIS IN RAG:
     → Returns top 4 chunks → those become the LLM's context
 """
 
+import os
+
 from fastembed import TextEmbedding
 
 EMBEDDING_MODEL_NAME = "BAAI/bge-small-en-v1.5"
@@ -53,7 +55,7 @@ def get_embedding_model() -> TextEmbedding:
 
     if _model is None:
         print(f"Loading embedding model: {EMBEDDING_MODEL_NAME}")
-        _model = TextEmbedding(EMBEDDING_MODEL_NAME)
+        _model = TextEmbedding(EMBEDDING_MODEL_NAME, threads=int(os.getenv("EMBED_THREADS", "0")) or None)
         print("Embedding model loaded (ONNX, 384-dim).")
 
     return _model
