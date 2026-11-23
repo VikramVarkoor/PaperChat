@@ -28,7 +28,7 @@ This is called **RAG (Retrieval-Augmented Generation)** — a core pattern in pr
 | Frontend | Next.js 14 (App Router) | React framework with built-in routing and API rewrites |
 | Styling | Tailwind CSS | Utility-first, fast to iterate |
 | Backend | FastAPI (Python) | Async-native, auto-generates API docs, great for streaming |
-| LLM | Groq — Llama 3.3 70B | ~800 tokens/sec inference, free tier available |
+| LLM | Groq — GPT-OSS 120B | ~800 tokens/sec inference, free tier available |
 | Embeddings | fastembed (ONNX) | Lightweight alternative to PyTorch, fits in 512MB RAM |
 | Vector search | NumPy cosine similarity | No database overhead — exact search on in-memory matrix |
 | PDF parsing | pdfplumber | Handles real-world messy PDFs better than PyPDF2 |
@@ -58,7 +58,7 @@ FastAPI Backend (Render)
     └── /chat
           ├── fastembed       → embed the question
           ├── NumPy           → cosine similarity search → top 4 chunks
-          ├── Groq SDK        → stream answer from Llama 3.3 70B
+          ├── Groq SDK        → stream answer from GPT-OSS 120B
           └── SSE             → stream tokens to browser in real-time
 ```
 
