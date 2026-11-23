@@ -30,7 +30,9 @@ WHY OVERLAPPING CHUNKS?
   sentence appears in BOTH chunks, so it's always retrievable in full.
 """
 
+import bisect
 import os
+import re
 import tempfile
 from pathlib import Path
 from typing import IO
@@ -41,6 +43,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 # ── Configuration (from .env) ─────────────────────────────────────────────────
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1500))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
+
+# Matches the "[Page N]" marker we insert in front of every page's text.
+_PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 
 def extract_text_from_pdf(file: IO[bytes]) -> tuple[str, int]:
@@ -106,21 +111,37 @@ def chunk_text(full_text: str) -> list[dict]:
         chunk_overlap=CHUNK_OVERLAP,
         # These separators are tried in order. The splitter prefers the first one.
         separators=["\n\n", "\n", " ", ""],
-        # `length_function` tells the splitter how to measure "size".
-        # We use len() (character count) not token count because it's faster.
-        # 1 token ≈ 4 characters in English, so 1500 chars ≈ 375 tokens.
+        # We measure size in characters, not tokens, because it's faster.
+        # 1 token is roughly 4 characters in English, so 1500 chars is about 375 tokens.
         length_function=len,
+        # Record where each chunk starts in full_text, so we can work out
+        # its page exactly (see below).
+        add_start_index=True,
     )
 
-    raw_chunks = splitter.split_text(full_text)
+    docs = splitter.create_documents([full_text])
+
+    # Position of every "[Page N]" marker in the full text, in order.
+    marker_positions = []
+    marker_pages = []
+    for m in _PAGE_MARKER.finditer(full_text):
+        marker_positions.append(m.start())
+        marker_pages.append(int(m.group(1)))
 
     chunks = []
-    for chunk in raw_chunks:
-        # Try to detect which page this chunk came from by looking for
-        # the [Page N] marker we inserted during extraction.
-        page = _extract_page_number(chunk)
+    for doc in docs:
+        # A chunk's page is the page that was open where the chunk STARTS:
+        # the last marker at or before its start offset. This also works for
+        # chunks from the middle of a long page that contain no marker.
+        start = doc.metadata.get("start_index", -1)
+        if start >= 0 and marker_positions:
+            idx = bisect.bisect_right(marker_positions, start) - 1
+            page = marker_pages[idx] if idx >= 0 else marker_pages[0]
+        else:
+            # Offset unavailable: fall back to markers inside the chunk.
+            page = _extract_page_number(doc.page_content)
         chunks.append({
-            "content": chunk,
+            "content": doc.page_content,
             "page": page,
         })
 
