@@ -46,7 +46,7 @@ TOP_K_RESULTS = int(os.getenv("TOP_K_RESULTS", "4"))
 _store: dict[str, dict] = {}
 
 
-def index_chunks(document_id: str, chunks: list[dict]) -> None:
+def index_chunks(document_id: str, chunks: list[dict], on_progress=None) -> None:
     """
     Embeds all chunks and stores them in memory.
 
@@ -67,6 +67,8 @@ def index_chunks(document_id: str, chunks: list[dict]) -> None:
     for i in range(0, len(texts), BATCH_SIZE):
         batch = texts[i : i + BATCH_SIZE]
         all_embeddings.extend(embed_texts(batch))
+        if on_progress:
+            on_progress(min(i + BATCH_SIZE, len(texts)), len(texts))
     embeddings = all_embeddings
     print("Embedding complete.")
 

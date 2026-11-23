@@ -33,6 +33,7 @@ import {
   ChatRequest,
   Document,
   SourceChunk,
+  UploadJobStatus,
   UploadResponse,
 } from "./types";
 
@@ -61,7 +62,8 @@ const API_BASE = process.env.NEXT_PUBLIC_BACKEND_URL ?? "/api/py";
  */
 export async function uploadDocument(
   file: File,
-  onProgress?: (percent: number) => void
+  onProgress?: (percent: number) => void,
+  onStatus?: (status: UploadJobStatus) => void
 ): Promise<UploadResponse> {
   // FormData lets us attach a file to a POST request.
   // Think of it as filling out an HTML form and hitting submit.
@@ -84,12 +86,16 @@ export async function uploadDocument(
 
     xhr.addEventListener("load", () => {
       if (xhr.status >= 200 && xhr.status < 300) {
+        // The server starts a background job and returns its id straight away.
+        // We then poll for real progress until the document is ready.
+        let jobId: string;
         try {
-          const data: UploadResponse = JSON.parse(xhr.responseText);
-          resolve(data);
+          jobId = JSON.parse(xhr.responseText).jobId;
         } catch {
           reject(new Error("Invalid JSON response from server"));
+          return;
         }
+        pollUploadJob(jobId, onStatus).then(resolve, reject);
       } else {
         // Try to parse error message from response body
         try {
@@ -107,6 +113,48 @@ export async function uploadDocument(
     xhr.open("POST", `${API_BASE}/upload`);
     xhr.send(formData);
   });
+}
+
+/**
+ * Polls the backend until the upload job is done (or failed).
+ * A few failed polls in a row are tolerated (cold start, flaky wifi).
+ * A 404 is fatal: it means the server restarted and lost the job.
+ */
+async function pollUploadJob(
+  jobId: string,
+  onStatus?: (status: UploadJobStatus) => void
+): Promise<UploadResponse> {
+  const deadline = Date.now() + 20 * 60 * 1000;
+  let failures = 0;
+
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 1000));
+
+    let status: UploadJobStatus;
+    try {
+      const res = await fetch(`${API_BASE}/upload/status/${jobId}`, { cache: "no-store" });
+      if (res.status === 404) {
+        const err = await res.json().catch(() => ({}));
+        return Promise.reject(new Error(err.detail || "Upload job not found. Please try again."));
+      }
+      if (!res.ok) throw new Error(`Status check failed (${res.status})`);
+      status = await res.json();
+      failures = 0;
+    } catch {
+      failures += 1;
+      if (failures >= 15) throw new Error("Lost connection to the server. Please try again.");
+      continue;
+    }
+
+    onStatus?.(status);
+
+    if (status.stage === "error") throw new Error(status.error || "Processing failed");
+    if (status.stage === "done" && status.document) {
+      return { success: true, document: status.document, message: "" };
+    }
+  }
+
+  throw new Error("Processing took too long. Please try again.");
 }
 
 // ── Chat with Streaming ───────────────────────────────────────────────────

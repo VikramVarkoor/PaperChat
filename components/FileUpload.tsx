@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import { UploadCloud, FileText, X, CheckCircle, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { uploadDocument } from "@/lib/api";
-import { Document, IngestionStatus } from "@/lib/types";
+import { Document, IngestionStatus, UploadJobStatus } from "@/lib/types";
 
 interface FileUploadProps {
   onDocumentReady: (document: Document) => void;
@@ -12,16 +12,53 @@ interface FileUploadProps {
 const PIPELINE_STEPS = [
   { id: "upload",  label: "Uploading file",              detail: "Sending to server" },
   { id: "extract", label: "Extracting text",             detail: "Reading PDF pages" },
-  { id: "chunk",   label: "Splitting into chunks",       detail: "Creating ~500 token segments" },
+  { id: "chunk",   label: "Splitting into chunks",       detail: "Creating ~1,500 character segments" },
   { id: "embed",   label: "Generating embeddings",       detail: "Converting text to vectors" },
   { id: "store",   label: "Indexing vector database",    detail: "Storing in NumPy index" },
 ] as const;
+
+// Which pipeline step each server stage belongs to
+const STAGE_TO_STEP: Record<UploadJobStatus["stage"], number> = {
+  queued: 1,
+  extracting: 1,
+  chunking: 2,
+  embedding: 3,
+  done: 5,
+  error: 1,
+};
+
+// Overall progress 0-100 while the server is processing
+function processingPercent(job: UploadJobStatus | null): number {
+  if (!job) return 0;
+  const frac = job.total > 0 ? job.done / job.total : 0;
+  switch (job.stage) {
+    case "queued":     return 2;
+    case "extracting": return 2 + frac * 8;
+    case "chunking":   return 12;
+    case "embedding":  return 15 + frac * 83;
+    default:           return 100;
+  }
+}
+
+// Live detail line under the active step
+function stepDetail(stepId: string, fallback: string, job: UploadJobStatus | null): string {
+  if (!job) return fallback;
+  if (stepId === "extract") {
+    if (job.stage === "queued") return "Waiting for the server";
+    if (job.total > 0) return `Reading page ${job.done} of ${job.total}`;
+  }
+  if (stepId === "embed" && job.total > 0) {
+    return `Embedding chunk ${job.done} of ${job.total}`;
+  }
+  return fallback;
+}
 
 export default function FileUpload({ onDocumentReady }: FileUploadProps) {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [currentStep, setCurrentStep] = useState(-1);
+  const [job, setJob] = useState<UploadJobStatus | null>(null);
   const [status, setStatus] = useState<IngestionStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -61,16 +98,22 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
     setErrorMessage(null);
 
     try {
-      const response = await uploadDocument(file, (percent) => {
-        setUploadProgress(percent);
-        if (percent === 100) {
+      const response = await uploadDocument(
+        file,
+        (percent) => {
+          setUploadProgress(percent);
+          if (percent === 100) {
+            setStatus("processing");
+            setCurrentStep(1);
+          }
+        },
+        // Real progress from the server, not a timer
+        (jobStatus) => {
+          setJob(jobStatus);
           setStatus("processing");
-          setCurrentStep(1);
-          setTimeout(() => setCurrentStep(2), 1000);
-          setTimeout(() => setCurrentStep(3), 2200);
-          setTimeout(() => setCurrentStep(4), 3400);
+          setCurrentStep(STAGE_TO_STEP[jobStatus.stage] ?? 1);
         }
-      });
+      );
       await new Promise((r) => setTimeout(r, 600));
       setStatus("ready");
       onDocumentReady(response.document);
@@ -82,7 +125,7 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
 
   const handleReset = () => {
     setFile(null); setStatus("idle"); setUploadProgress(0);
-    setCurrentStep(-1); setErrorMessage(null);
+    setCurrentStep(-1); setErrorMessage(null); setJob(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -207,7 +250,10 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
                 {status === "uploading" ? (
                   <div className="h-full bg-violet-500 rounded-full transition-all duration-300" style={{ width: `${uploadProgress}%` }} />
                 ) : (
-                  <div className="h-full bg-violet-500 rounded-full animate-pulse w-full" />
+                  <div
+                    className="h-full bg-violet-500 rounded-full transition-all duration-500"
+                    style={{ width: `${Math.max(processingPercent(job), 3)}%` }}
+                  />
                 )}
               </div>
             </div>
@@ -231,7 +277,7 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
                         {step.label}
                       </p>
                       {isActive && (
-                        <p className="text-xs text-gray-600 mt-1">{step.detail}</p>
+                        <p className="text-xs text-gray-600 mt-1">{stepDetail(step.id, step.detail, job)}</p>
                       )}
                     </div>
                     {isDone && <span className="ml-auto text-xs text-emerald-600/70 font-mono">done</span>}
@@ -256,6 +302,12 @@ export default function FileUpload({ onDocumentReady }: FileUploadProps) {
               Try again
             </button>
           </div>
+        )}
+
+        {status === "processing" && job?.stage === "embedding" && job.total >= 100 && (
+          <p className="text-center text-xs text-gray-600 mt-4">
+            Long document on a free-tier server, this can take a few minutes.
+          </p>
         )}
 
         <p className="text-center text-xs text-gray-700 mt-8">

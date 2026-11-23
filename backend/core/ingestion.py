@@ -52,7 +52,7 @@ PAGES_PER_BATCH = 5
 _PAGE_MARKER = re.compile(r"\[Page (\d+)\]")
 
 
-def extract_text_from_pdf(file: IO[bytes]) -> tuple[str, int]:
+def extract_text_from_pdf(file: IO[bytes], on_progress=None) -> tuple[str, int]:
     """
     Extracts all text from a PDF file object.
 
@@ -94,6 +94,9 @@ def extract_text_from_pdf(file: IO[bytes]) -> tuple[str, int]:
                 if text and text.strip():
                     # Page marker so we can track which chunk came from which page
                     pages_text.append(f"[Page {page_num}]\n{text.strip()}")
+
+                if on_progress:
+                    on_progress("extracting", page_num, page_count)
         gc.collect()
 
     full_text = "\n\n".join(pages_text)
@@ -178,7 +181,7 @@ def _extract_page_number(chunk_text: str) -> int:
     return 1  # Fallback
 
 
-def process_pdf(file: IO[bytes]) -> tuple[list[dict], int]:
+def process_pdf(file: IO[bytes], on_progress=None) -> tuple[list[dict], int]:
     """
     Full ingestion pipeline: extract → chunk.
     This is the function called by the upload router.
@@ -192,7 +195,7 @@ def process_pdf(file: IO[bytes]) -> tuple[list[dict], int]:
         page_count: total pages in the original PDF
     """
     # Step 1: Extract all text
-    full_text, page_count = extract_text_from_pdf(file)
+    full_text, page_count = extract_text_from_pdf(file, on_progress)
 
     if not full_text.strip():
         raise ValueError(
@@ -202,6 +205,8 @@ def process_pdf(file: IO[bytes]) -> tuple[list[dict], int]:
         )
 
     # Step 2: Split into chunks
+    if on_progress:
+        on_progress("chunking", 0, 1)
     chunks = chunk_text(full_text)
 
     if not chunks:

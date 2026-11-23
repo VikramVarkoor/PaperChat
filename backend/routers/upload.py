@@ -30,6 +30,9 @@ FASTAPI CONCEPTS USED HERE:
   blocking — critical for a web server.
 """
 
+import io
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -37,33 +40,79 @@ from fastapi import APIRouter, UploadFile, File, HTTPException
 
 from core.ingestion import process_pdf
 from core.vectorstore import index_chunks, delete_collection
-from models.schemas import DocumentInfo, UploadResponse
+from models.schemas import DocumentInfo
 
 # APIRouter is like a mini-app. We register routes on it, then include it in main.py.
 router = APIRouter()
 
 
-@router.post("/upload", response_model=UploadResponse)
+# ── Background upload jobs ────────────────────────────────────────────────────
+#
+# Processing a long PDF (extract, chunk, embed) can take minutes on a small
+# server. So POST /upload only validates the file, starts a background thread
+# and returns a job id straight away. The frontend then polls
+# GET /upload/status/{job_id} to show real progress.
+#
+# Jobs live in memory (like the vector store), so a server restart loses them.
+_jobs: dict[str, dict] = {}
+_MAX_JOBS = 20
+_pipeline_lock = threading.Lock()  # one document at a time on a 512MB server
+
+
+def _prune_jobs() -> None:
+    """Keeps only the most recent jobs so memory doesn't grow."""
+    while len(_jobs) >= _MAX_JOBS:
+        oldest = min(_jobs, key=lambda j: _jobs[j]["created"])
+        del _jobs[oldest]
+
+
+def _run_job(job_id: str, file_bytes: bytes, filename: str) -> None:
+    job = _jobs[job_id]
+
+    def on_progress(stage: str, done: int, total: int) -> None:
+        job.update(stage=stage, done=done, total=total)
+
+    try:
+        with _pipeline_lock:
+            job.update(stage="extracting", done=0, total=0)
+            chunks, page_count = process_pdf(io.BytesIO(file_bytes), on_progress)
+            print(f"Processed '{filename}': {page_count} pages, {len(chunks)} chunks")
+
+            job.update(stage="embedding", done=0, total=len(chunks))
+            index_chunks(job["documentId"], chunks, on_progress=lambda d, t: on_progress("embedding", d, t))
+
+        document = DocumentInfo(
+            id=job["documentId"],
+            name=filename or "document.pdf",
+            pageCount=page_count,
+            chunkCount=len(chunks),
+            uploadedAt=datetime.now(timezone.utc).isoformat(),
+        )
+        job.update(stage="done", document=document.model_dump(by_alias=True))
+
+    except ValueError as e:
+        # Something was wrong with the PDF content
+        job.update(stage="error", error=str(e))
+
+    except Exception as e:
+        print(f"ERROR during ingestion of '{filename}': {e}")
+        job.update(stage="error", error="Failed to process the document. Please try again.")
+
+
+@router.post("/upload")
 async def upload_document(
     # `File(...)` tells FastAPI this is a required file upload field.
-    # The `...` means "required" in Pydantic/FastAPI syntax.
     file: UploadFile = File(...),
 ):
     """
-    Ingests a PDF document into the RAG pipeline.
+    Starts ingesting a PDF and returns a job id.
 
     Flow:
       1. Validate file type and size
-      2. Extract text using pdfplumber
-      3. Split into overlapping chunks
-      4. Embed all chunks using sentence-transformers
-      5. Store in Chroma vector database
-      6. Return DocumentInfo to frontend
-
-    Frontend calls this with FormData containing the PDF file.
+      2. Start a background job: extract text, chunk, embed, store in memory
+      3. Return {"jobId": ...} immediately
+      4. Frontend polls GET /upload/status/{jobId} until stage is "done"
     """
-
-    # ── Validation ────────────────────────────────────────────────────────────
 
     # Check file type (content_type is set by the browser from the file's MIME type)
     if file.content_type not in ("application/pdf", "application/octet-stream"):
@@ -72,7 +121,6 @@ async def upload_document(
             detail=f"Invalid file type: {file.content_type}. Only PDFs are supported."
         )
 
-    # Check file size (read into memory, validate, then reset for processing)
     file_bytes = await file.read()
     max_size_mb = 20
     if len(file_bytes) > max_size_mb * 1024 * 1024:
@@ -81,54 +129,39 @@ async def upload_document(
             detail=f"File too large. Maximum size is {max_size_mb}MB."
         )
 
-    # Reset the file position to the beginning so pdfplumber can read it
-    # (reading already consumed the stream — we need to rewind it)
-    await file.seek(0)
+    job_id = f"job_{uuid.uuid4().hex[:12]}"
+    _prune_jobs()
+    _jobs[job_id] = {
+        "created": time.time(),
+        "documentId": f"doc_{uuid.uuid4().hex[:12]}",
+        "stage": "queued",
+        "done": 0,
+        "total": 0,
+    }
 
-    # ── Generate Document ID ──────────────────────────────────────────────────
-    # uuid4() generates a random, universally unique identifier.
-    # We prefix with "doc_" so it's clearly a document ID.
-    # This becomes the Chroma collection name.
-    # "doc_" prefix + 8 chars of UUID = e.g. "doc_a1b2c3d4"
-    document_id = f"doc_{uuid.uuid4().hex[:12]}"
+    threading.Thread(
+        target=_run_job,
+        args=(job_id, file_bytes, file.filename or "document.pdf"),
+        daemon=True,
+    ).start()
 
-    # ── Run Ingestion Pipeline ────────────────────────────────────────────────
-    try:
-        # Step 1 + 2: Extract text and split into chunks
-        # file.file is the underlying SpooledTemporaryFile that pdfplumber can read
-        chunks, page_count = process_pdf(file.file)
+    return {"jobId": job_id}
 
-        print(f"Processed '{file.filename}': {page_count} pages, {len(chunks)} chunks")
 
-        # Steps 3 + 4: Embed chunks and store in Chroma
-        index_chunks(document_id, chunks)
-
-    except ValueError as e:
-        # ValueError means something was wrong with the PDF content
-        raise HTTPException(status_code=422, detail=str(e))
-
-    except Exception as e:
-        # Unexpected errors — log them and return a generic message
-        print(f"ERROR during ingestion of '{file.filename}': {e}")
+@router.get("/upload/status/{job_id}")
+async def upload_status(job_id: str):
+    """
+    Progress of an upload job.
+    stage is one of: queued, extracting, chunking, embedding, done, error.
+    done/total count pages while extracting and chunks while embedding.
+    """
+    job = _jobs.get(job_id)
+    if job is None:
         raise HTTPException(
-            status_code=500,
-            detail="Failed to process the document. Please try again."
+            status_code=404,
+            detail="Upload job not found. The server may have restarted, please try again.",
         )
-
-    # ── Build Response ────────────────────────────────────────────────────────
-    document = DocumentInfo(
-        id=document_id,
-        name=file.filename or "document.pdf",
-        pageCount=page_count,
-        chunkCount=len(chunks),
-        uploadedAt=datetime.now(timezone.utc).isoformat(),
-    )
-
-    return UploadResponse(
-        success=True,
-        document=document,
-        message=f"Successfully processed {page_count} pages into {len(chunks)} searchable chunks.",
-    )
+    return {k: v for k, v in job.items() if k not in ("created", "documentId")}
 
 
 @router.delete("/documents/{document_id}")

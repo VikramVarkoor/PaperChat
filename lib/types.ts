@@ -100,6 +100,18 @@ export interface UploadResponse {
   message: string;
 }
 
+/**
+ * Progress of a background upload job (GET /upload/status/{jobId}).
+ * done/total count pages while extracting and chunks while embedding.
+ */
+export interface UploadJobStatus {
+  stage: "queued" | "extracting" | "chunking" | "embedding" | "done" | "error";
+  done: number;
+  total: number;
+  document?: Document;
+  error?: string;
+}
+
 // ── App State ─────────────────────────────────────────────────────────────
 
 /**
